@@ -144,10 +144,8 @@ impl AutostartProvider for SystemdProvider {
             .map(|((path, state), text)| {
                 let name = unit_name(path);
                 let enabled = matches!(state.as_str(), "enabled" | "enabled-runtime");
-                let (description, command) = text
-                    .as_deref()
-                    .map(unit_file_meta)
-                    .unwrap_or_default();
+                let (description, command) =
+                    text.as_deref().map(unit_file_meta).unwrap_or_default();
                 AutostartEntry {
                     id: name.clone(),
                     display_name: description.clone().unwrap_or_else(|| name.clone()),
@@ -183,11 +181,17 @@ impl AutostartProvider for SystemdProvider {
     }
 
     async fn add(&self, _entry: &AutostartEntry) -> Result<()> {
-        bail!("adding units is not supported for {} in this pass", self.id());
+        bail!(
+            "adding units is not supported for {} in this pass",
+            self.id()
+        );
     }
 
     async fn remove(&self, _id: &str) -> Result<()> {
-        bail!("removing units is not supported for {} in this pass", self.id());
+        bail!(
+            "removing units is not supported for {} in this pass",
+            self.id()
+        );
     }
 }
 

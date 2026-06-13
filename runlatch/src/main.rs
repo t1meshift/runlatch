@@ -1,10 +1,10 @@
-#[cfg(not(target_os = "linux"))]
-compile_error!("runlatch only supports Linux");
-
 //! runlatch CLI entry point.
 //!
 //! The binary owns the async runtime (`#[tokio::main]`) and `.await`s into
 //! `runlatch-core`; the core never starts a runtime of its own.
+
+#[cfg(not(target_os = "linux"))]
+compile_error!("runlatch only supports Linux");
 
 mod cli;
 mod completions;

@@ -1,6 +1,3 @@
-#[cfg(not(target_os = "linux"))]
-compile_error!("runlatch only supports Linux");
-
 //! `runlatch-core` — the data model, provider abstraction, built-in providers, and
 //! registry that power [runlatch](https://github.com/sh1ftr/runlatch), a modular
 //! Linux autostart manager.
@@ -12,6 +9,9 @@ compile_error!("runlatch only supports Linux");
 //!
 //! See [`provider`] for why the trait is `async`, and the crate README for a
 //! walkthrough on writing a provider.
+
+#[cfg(not(target_os = "linux"))]
+compile_error!("runlatch only supports Linux");
 
 pub mod desktop_file;
 pub mod model;
