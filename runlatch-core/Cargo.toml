@@ -1,0 +1,20 @@
+[package]
+name = "runlatch-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core data model, provider trait, and built-in providers for runlatch."
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["fs"] }
+zbus = { version = "5", features = ["tokio"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "rt", "macros"] }

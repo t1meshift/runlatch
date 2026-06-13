@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["runlatch-core", "runlatch"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["sh1ft <sh1ftr@proton.me>"]
+repository = "https://github.com/sh1ftr/runlatch"
+description = "A modular Linux autostart manager unifying systemd, XDG, and DE-specific autostart behind a trait-based provider system."
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
