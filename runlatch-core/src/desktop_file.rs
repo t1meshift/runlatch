@@ -26,6 +26,20 @@ enum Line {
 }
 
 /// An in-memory, order-preserving view of a `.desktop` file.
+///
+/// ```
+/// use runlatch_core::desktop_file::{DesktopFile, DESKTOP_ENTRY_GROUP};
+///
+/// let mut file = DesktopFile::parse("[Desktop Entry]\nName=Example\nExec=example\n");
+/// assert_eq!(file.get(DESKTOP_ENTRY_GROUP, "Name"), Some("Example"));
+///
+/// // Editing one key leaves everything else byte-for-byte intact.
+/// file.set(DESKTOP_ENTRY_GROUP, "Hidden", "true");
+/// assert_eq!(
+///     file.to_text(),
+///     "[Desktop Entry]\nName=Example\nExec=example\nHidden=true\n",
+/// );
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct DesktopFile {
     lines: Vec<Line>,

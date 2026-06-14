@@ -1,14 +1,12 @@
-//! `runlatch-core` — the data model, provider abstraction, built-in providers, and
-//! registry that power [runlatch](https://github.com/sh1ftr/runlatch), a modular
-//! Linux autostart manager.
+#![doc = include_str!("../README.md")]
 //!
-//! Linux autostart is spread across systemd units, XDG `.desktop` files, and
-//! DE-specific session configs. This crate unifies them behind one trait,
-//! [`AutostartProvider`], aggregated by a [`Registry`]. New backends (OpenRC, KDE,
-//! GNOME, …) are added by implementing the trait — no changes to the core.
+//! ## Module map
 //!
-//! See [`provider`] for why the trait is `async`, and the crate README for a
-//! walkthrough on writing a provider.
+//! - [`model`] — the provider-agnostic [`AutostartEntry`] and [`Scope`].
+//! - [`provider`] — the [`AutostartProvider`] trait and why it is `async`.
+//! - [`providers`] — the built-in [`XdgAutostartProvider`] and [`SystemdProvider`].
+//! - [`registry`] — the aggregating [`Registry`].
+//! - [`desktop_file`] — an order-preserving `.desktop` reader/writer.
 
 #[cfg(not(target_os = "linux"))]
 compile_error!("runlatch only supports Linux");

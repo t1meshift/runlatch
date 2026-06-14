@@ -16,6 +16,22 @@ pub enum Scope {
 ///
 /// `id` is stable and unique *within a provider*; pair it with [`AutostartEntry::source`]
 /// (the provider id) to address an entry unambiguously across the whole registry.
+///
+/// ```
+/// use runlatch_core::{AutostartEntry, Scope};
+///
+/// let entry = AutostartEntry {
+///     id: "redshift".into(),
+///     display_name: "Redshift".into(),
+///     description: None,
+///     command: "redshift-gtk".into(),
+///     icon: None,
+///     enabled: true,
+///     source: "xdg-autostart".into(),
+///     scope: Scope::User,
+/// };
+/// assert_eq!(format!("{}:{}", entry.source, entry.id), "xdg-autostart:redshift");
+/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct AutostartEntry {
     /// Stable, unique within a provider (e.g. a `.desktop` file stem or a unit name).

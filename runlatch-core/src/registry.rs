@@ -32,6 +32,18 @@ pub struct AggregateResult {
 /// Construct with [`Registry::with_defaults`] for the built-in providers, or
 /// [`Registry::new`] to inject a caller-supplied set (the extension point for
 /// external crates that ship their own providers).
+///
+/// ```no_run
+/// use runlatch_core::Registry;
+///
+/// # async fn run() {
+/// let registry = Registry::with_defaults();
+/// let result = registry.all_entries().await;
+/// for entry in &result.entries {
+///     println!("{}:{} (enabled={})", entry.source, entry.id, entry.enabled);
+/// }
+/// # }
+/// ```
 pub struct Registry {
     providers: Vec<Box<dyn AutostartProvider>>,
 }

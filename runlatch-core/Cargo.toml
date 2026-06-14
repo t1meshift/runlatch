@@ -6,6 +6,13 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Core data model, provider trait, and built-in providers for runlatch."
+readme = "README.md"
+keywords = ["autostart", "systemd", "xdg", "linux", "freedesktop"]
+categories = ["os::unix-apis", "config"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
 
 [dependencies]
 anyhow.workspace = true

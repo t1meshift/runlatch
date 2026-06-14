@@ -21,6 +21,28 @@ use crate::model::{AutostartEntry, Scope};
 ///
 /// Implementors must be `Send + Sync` so the registry can hold them as
 /// `Box<dyn AutostartProvider>` and share them across tasks.
+///
+/// ```
+/// use anyhow::Result;
+/// use async_trait::async_trait;
+/// use runlatch_core::{AutostartEntry, AutostartProvider, Scope};
+///
+/// struct MyProvider;
+///
+/// #[async_trait]
+/// impl AutostartProvider for MyProvider {
+///     fn id(&self) -> &'static str { "my-provider" }
+///     fn scope(&self) -> Scope { Scope::User }
+///     // Return `false` (never panic) when the backend isn't present;
+///     // the registry then silently skips this provider.
+///     async fn is_available(&self) -> bool { true }
+///     async fn entries(&self) -> Result<Vec<AutostartEntry>> { Ok(vec![]) }
+///     async fn enable(&self, _id: &str) -> Result<()> { Ok(()) }
+///     async fn disable(&self, _id: &str) -> Result<()> { Ok(()) }
+///     async fn add(&self, _entry: &AutostartEntry) -> Result<()> { Ok(()) }
+///     async fn remove(&self, _id: &str) -> Result<()> { Ok(()) }
+/// }
+/// ```
 #[async_trait]
 pub trait AutostartProvider: Send + Sync {
     /// Stable provider id, e.g. `"xdg-autostart"`. Used as the `source` on entries
