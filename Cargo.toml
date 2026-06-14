@@ -3,10 +3,10 @@ resolver = "2"
 members = ["runlatch-core", "runlatch"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
-authors = ["sh1ft <sh1ftr@proton.me>"]
+authors = ["Yury Kurlykov <sh1ftr@protonmail.ch>"]
 repository = "https://github.com/sh1ftr/runlatch"
 description = "A modular Linux autostart manager unifying systemd, XDG, and DE-specific autostart behind a trait-based provider system."
 

@@ -4,7 +4,8 @@
 //!
 //! - [`model`] — the provider-agnostic [`AutostartEntry`] and [`Scope`].
 //! - [`provider`] — the [`AutostartProvider`] trait and why it is `async`.
-//! - [`providers`] — the built-in [`XdgAutostartProvider`] and [`SystemdProvider`].
+//! - [`providers`] — the built-in [`XdgAutostartProvider`] (user and system) and
+//!   [`SystemdProvider`] (user and system).
 //! - [`registry`] — the aggregating [`Registry`].
 //! - [`desktop_file`] — an order-preserving `.desktop` reader/writer.
 

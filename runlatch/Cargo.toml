@@ -23,7 +23,7 @@ tempfile = "3"
 
 [dependencies]
 anyhow.workspace = true
-runlatch-core = { path = "../runlatch-core", version = "0.1.0" }
+runlatch-core = { path = "../runlatch-core", version = "0.2.0" }
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
 serde_json = "1"

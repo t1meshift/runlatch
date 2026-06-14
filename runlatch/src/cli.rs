@@ -17,6 +17,9 @@ pub enum Command {
         /// Only show entries from this provider id (e.g. `xdg-autostart`).
         #[arg(long)]
         source: Option<String>,
+        /// Only show entries in this scope.
+        #[arg(long)]
+        scope: Option<ScopeArg>,
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -59,6 +62,24 @@ pub enum Shell {
     Bash,
     Fish,
     Zsh,
+}
+
+/// Autostart scope, for the `list --scope` filter.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ScopeArg {
+    /// User-level entries.
+    User,
+    /// System-level entries.
+    System,
+}
+
+impl From<ScopeArg> for runlatch_core::Scope {
+    fn from(arg: ScopeArg) -> Self {
+        match arg {
+            ScopeArg::User => runlatch_core::Scope::User,
+            ScopeArg::System => runlatch_core::Scope::System,
+        }
+    }
 }
 
 /// What to complete.

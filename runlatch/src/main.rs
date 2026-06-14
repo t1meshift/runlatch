@@ -14,7 +14,7 @@ use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use runlatch_core::{AutostartProvider, Registry};
 
-use crate::cli::{Cli, Command, CompleteCmd, Shell};
+use crate::cli::{Cli, Command, CompleteCmd, ScopeArg, Shell};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,7 +22,11 @@ async fn main() -> Result<()> {
     let registry = Registry::with_defaults();
 
     match cli.command {
-        Command::List { source, json } => list(&registry, source, json).await,
+        Command::List {
+            source,
+            scope,
+            json,
+        } => list(&registry, source, scope, json).await,
         Command::Enable { target } => set_enabled(&registry, &target, true).await,
         Command::Disable { target } => set_enabled(&registry, &target, false).await,
         Command::Sources => sources(&registry).await,
@@ -32,11 +36,21 @@ async fn main() -> Result<()> {
 }
 
 /// `runlatch list` — aggregate entries, surface per-provider errors on stderr.
-async fn list(registry: &Registry, source: Option<String>, json: bool) -> Result<()> {
+async fn list(
+    registry: &Registry,
+    source: Option<String>,
+    scope: Option<ScopeArg>,
+    json: bool,
+) -> Result<()> {
     let mut result = registry.all_entries().await;
 
     if let Some(source) = &source {
         result.entries.retain(|e| &e.source == source);
+    }
+
+    if let Some(scope) = scope {
+        let scope = scope.into();
+        result.entries.retain(|e| e.scope == scope);
     }
 
     // Per-provider failures go to stderr but never suppress good results.

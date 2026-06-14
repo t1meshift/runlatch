@@ -54,11 +54,12 @@ impl Registry {
         Self { providers }
     }
 
-    /// Build a registry with the crate's built-in providers: XDG autostart and
-    /// systemd user units.
+    /// Build a registry with the crate's built-in providers: XDG autostart (user
+    /// and system) and systemd units (user and system).
     pub fn with_defaults() -> Self {
         Self::new(vec![
-            Box::new(XdgAutostartProvider::new()),
+            Box::new(XdgAutostartProvider::user()),
+            Box::new(XdgAutostartProvider::system()),
             Box::new(SystemdProvider::user()),
             Box::new(SystemdProvider::system()),
         ])

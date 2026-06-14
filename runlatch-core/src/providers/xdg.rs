@@ -1,13 +1,17 @@
-//! XDG autostart provider (user scope).
+//! XDG autostart provider (user and system scope).
 //!
-//! Manages `~/.config/autostart/*.desktop` per the freedesktop Desktop Entry and
-//! Autostart specs. Disabling an entry sets `Hidden=true` (the spec's "don't
-//! autostart, but keep the file" signal) rather than deleting it; enabling removes
-//! the `Hidden` key. The autostart directory honors `XDG_CONFIG_HOME`.
+//! Manages `*.desktop` files per the freedesktop Desktop Entry and Autostart specs.
+//! The user-scoped provider works on `$XDG_CONFIG_HOME/autostart` (default
+//! `~/.config/autostart`); the system-scoped one works on `/etc/xdg/autostart`
+//! (the first entry of `$XDG_CONFIG_DIRS`). Disabling an entry sets `Hidden=true`
+//! (the spec's "don't autostart, but keep the file" signal) rather than deleting it;
+//! enabling removes the `Hidden` key.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use std::collections::HashSet;
+
+use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use futures::future::join_all;
 
@@ -15,38 +19,108 @@ use crate::desktop_file::{DESKTOP_ENTRY_GROUP, DesktopFile};
 use crate::model::{AutostartEntry, Scope};
 use crate::provider::AutostartProvider;
 
-const PROVIDER_ID: &str = "xdg-autostart";
+const USER_PROVIDER_ID: &str = "xdg-autostart";
+const SYSTEM_PROVIDER_ID: &str = "xdg-autostart-system";
 
-/// Provider for `$XDG_CONFIG_HOME/autostart` (default `~/.config/autostart`).
+/// Provider for XDG autostart directories, either user- or system-scoped.
+///
+/// Construct with [`XdgAutostartProvider::user`] for `~/.config/autostart` or
+/// [`XdgAutostartProvider::system`] for the system autostart directories. The two
+/// differ in their reported id, scope, and which directories they search.
+///
+/// A provider may search more than one directory (the system scope merges every
+/// `$XDG_CONFIG_DIRS/autostart`). Directories are searched in precedence order:
+/// when the same entry id appears in more than one, the first wins, and edits land
+/// on whichever directory the file actually lives in.
 pub struct XdgAutostartProvider {
-    autostart_dir: PathBuf,
+    id: &'static str,
+    scope: Scope,
+    autostart_dirs: Vec<PathBuf>,
 }
 
 impl XdgAutostartProvider {
-    /// Build a provider rooted at the user's autostart directory, resolved from
-    /// `XDG_CONFIG_HOME` (falling back to `~/.config`).
+    /// Build a user-scoped provider rooted at the user's autostart directory,
+    /// resolved from `XDG_CONFIG_HOME` (falling back to `~/.config`).
+    pub fn user() -> Self {
+        Self {
+            id: USER_PROVIDER_ID,
+            scope: Scope::User,
+            autostart_dirs: vec![default_user_autostart_dir()],
+        }
+    }
+
+    /// Build a system-scoped provider that searches every `$XDG_CONFIG_DIRS/autostart`
+    /// directory (falling back to `/etc/xdg/autostart`), in precedence order.
+    /// Enable/disable may require elevated privileges; listing is always read-only.
+    pub fn system() -> Self {
+        Self {
+            id: SYSTEM_PROVIDER_ID,
+            scope: Scope::System,
+            autostart_dirs: default_system_autostart_dirs(),
+        }
+    }
+
+    /// Build a user-scoped provider rooted at the user's autostart directory.
+    /// Equivalent to [`XdgAutostartProvider::user`].
     pub fn new() -> Self {
-        Self::with_autostart_dir(default_autostart_dir())
+        Self::user()
     }
 
-    /// Build a provider rooted at an explicit autostart directory. Primarily for
-    /// tests, but also usable by callers that manage a non-standard location.
+    /// Build a user-scoped provider rooted at a single explicit autostart directory.
+    /// Primarily for tests, but also usable by callers that manage a non-standard
+    /// location.
     pub fn with_autostart_dir(autostart_dir: PathBuf) -> Self {
-        Self { autostart_dir }
+        Self {
+            id: USER_PROVIDER_ID,
+            scope: Scope::User,
+            autostart_dirs: vec![autostart_dir],
+        }
     }
 
-    /// Path to the `.desktop` file backing `id`.
+    /// The directory new entries are created in: the highest-precedence search dir.
+    fn primary_dir(&self) -> &Path {
+        // Constructors always populate at least one directory.
+        &self.autostart_dirs[0]
+    }
+
+    /// Path a *new* `.desktop` file for `id` would be written to.
     fn entry_path(&self, id: &str) -> PathBuf {
-        self.autostart_dir.join(format!("{id}.desktop"))
+        self.primary_dir().join(format!("{id}.desktop"))
     }
 
-    /// Read and parse a single entry's desktop file, erroring if it doesn't exist.
-    async fn read_entry_file(&self, id: &str) -> Result<DesktopFile> {
-        let path = self.entry_path(id);
+    /// Locate an existing entry's `.desktop` file across the search dirs, in
+    /// precedence order.
+    async fn find_entry_path(&self, id: &str) -> Option<PathBuf> {
+        let file = format!("{id}.desktop");
+        for dir in &self.autostart_dirs {
+            let path = dir.join(&file);
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    /// Read and parse an existing entry's desktop file, returning its path too so
+    /// edits can be written back in place. Errors if no such entry exists.
+    async fn read_entry_file(&self, id: &str) -> Result<(PathBuf, DesktopFile)> {
+        let path = self
+            .find_entry_path(id)
+            .await
+            .ok_or_else(|| anyhow!("no autostart entry '{id}' in {}", self.dirs_display()))?;
         let text = tokio::fs::read_to_string(&path)
             .await
-            .with_context(|| format!("no autostart entry '{id}' at {}", path.display()))?;
-        Ok(DesktopFile::parse(&text))
+            .with_context(|| format!("reading autostart entry '{id}' at {}", path.display()))?;
+        Ok((path, DesktopFile::parse(&text)))
+    }
+
+    /// Comma-separated list of the search dirs, for error messages.
+    fn dirs_display(&self) -> String {
+        self.autostart_dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -59,85 +133,103 @@ impl Default for XdgAutostartProvider {
 #[async_trait]
 impl AutostartProvider for XdgAutostartProvider {
     fn id(&self) -> &'static str {
-        PROVIDER_ID
+        self.id
     }
 
     fn scope(&self) -> Scope {
-        Scope::User
+        self.scope
     }
 
     async fn is_available(&self) -> bool {
-        // Available if the autostart dir exists, or its parent (the config home)
-        // does so we could create it. False only when we can't resolve a config
-        // home at all (e.g. no HOME and no XDG_CONFIG_HOME).
-        if tokio::fs::metadata(&self.autostart_dir).await.is_ok() {
-            return true;
+        // Available if any search dir exists, or its parent (the config home) does
+        // so we could create it. False only when none can be resolved at all (e.g.
+        // no HOME and no XDG_CONFIG_HOME).
+        for dir in &self.autostart_dirs {
+            if tokio::fs::metadata(dir).await.is_ok() {
+                return true;
+            }
+            if let Some(parent) = dir.parent()
+                && tokio::fs::metadata(parent).await.is_ok()
+            {
+                return true;
+            }
         }
-        match self.autostart_dir.parent() {
-            Some(parent) => tokio::fs::metadata(parent).await.is_ok(),
-            None => false,
-        }
+        false
     }
 
     async fn entries(&self) -> Result<Vec<AutostartEntry>> {
-        let mut read_dir = match tokio::fs::read_dir(&self.autostart_dir).await {
-            Ok(rd) => rd,
-            // A missing autostart dir simply means no entries yet.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => {
-                return Err(e).with_context(|| {
-                    format!("reading autostart dir {}", self.autostart_dir.display())
-                });
-            }
-        };
-
-        let mut paths = Vec::new();
-        while let Some(dent) = read_dir.next_entry().await? {
-            let path = dent.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("desktop") {
-                paths.push(path);
-            }
-        }
-
-        // Read every file concurrently so a large autostart dir doesn't serialize.
-        let reads = paths
-            .iter()
-            .map(|p| async move { (p, tokio::fs::read_to_string(p).await) });
-        let results = join_all(reads).await;
-
+        // Merge across every search dir; earlier dirs take precedence, so an id
+        // already seen in a higher-precedence dir shadows later ones.
+        let mut seen = HashSet::new();
         let mut entries = Vec::new();
-        for (path, read) in results {
-            // Skip files we can't read or that lack a usable id, rather than
-            // failing the whole listing on one bad file.
-            let Ok(text) = read else { continue };
-            let Some(id) = file_stem(path) else { continue };
-            entries.push(entry_from_desktop(&id, &DesktopFile::parse(&text)));
+
+        for dir in &self.autostart_dirs {
+            let mut read_dir = match tokio::fs::read_dir(dir).await {
+                Ok(rd) => rd,
+                // A missing autostart dir simply contributes no entries.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("reading autostart dir {}", dir.display()));
+                }
+            };
+
+            let mut paths = Vec::new();
+            while let Some(dent) = read_dir.next_entry().await? {
+                let path = dent.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("desktop") {
+                    paths.push(path);
+                }
+            }
+
+            // Read every file concurrently so a large autostart dir doesn't serialize.
+            let reads = paths
+                .iter()
+                .map(|p| async move { (p, tokio::fs::read_to_string(p).await) });
+            let results = join_all(reads).await;
+
+            for (path, read) in results {
+                // Skip files we can't read or that lack a usable id, rather than
+                // failing the whole listing on one bad file.
+                let Ok(text) = read else { continue };
+                let Some(id) = file_stem(path) else { continue };
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                entries.push(entry_from_desktop(
+                    &id,
+                    &DesktopFile::parse(&text),
+                    self.id,
+                    self.scope,
+                ));
+            }
         }
         Ok(entries)
     }
 
     async fn enable(&self, id: &str) -> Result<()> {
-        let mut file = self.read_entry_file(id).await?;
+        let (path, mut file) = self.read_entry_file(id).await?;
         // Per the Autostart spec, presence of Hidden=true is what disables an
         // entry; enabling just removes the key.
         file.remove(DESKTOP_ENTRY_GROUP, "Hidden");
-        self.write_entry_file(id, &file).await
+        self.write_entry_file(id, &path, &file).await
     }
 
     async fn disable(&self, id: &str) -> Result<()> {
-        let mut file = self.read_entry_file(id).await?;
+        let (path, mut file) = self.read_entry_file(id).await?;
         file.set(DESKTOP_ENTRY_GROUP, "Hidden", "true");
-        self.write_entry_file(id, &file).await
+        self.write_entry_file(id, &path, &file).await
     }
 
     async fn add(&self, entry: &AutostartEntry) -> Result<()> {
-        let path = self.entry_path(&entry.id);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        if self.find_entry_path(&entry.id).await.is_some() {
             bail!("autostart entry '{}' already exists", entry.id);
         }
-        tokio::fs::create_dir_all(&self.autostart_dir)
+        let dir = self.primary_dir();
+        tokio::fs::create_dir_all(dir)
             .await
-            .with_context(|| format!("creating autostart dir {}", self.autostart_dir.display()))?;
+            .with_context(|| format!("creating autostart dir {}", dir.display()))?;
+        let path = self.entry_path(&entry.id);
 
         let mut file = DesktopFile::default();
         file.set(DESKTOP_ENTRY_GROUP, "Type", "Application");
@@ -152,28 +244,50 @@ impl AutostartProvider for XdgAutostartProvider {
         if !entry.enabled {
             file.set(DESKTOP_ENTRY_GROUP, "Hidden", "true");
         }
-        self.write_entry_file(&entry.id, &file).await
+        self.write_entry_file(&entry.id, &path, &file).await
     }
 
     async fn remove(&self, id: &str) -> Result<()> {
-        let path = self.entry_path(id);
-        tokio::fs::remove_file(&path)
+        let path = self
+            .find_entry_path(id)
             .await
-            .with_context(|| format!("removing autostart entry '{id}' at {}", path.display()))
+            .ok_or_else(|| anyhow!("no autostart entry '{id}' in {}", self.dirs_display()))?;
+        tokio::fs::remove_file(&path).await.map_err(|e| {
+            with_sudo_hint(
+                e,
+                &format!("removing autostart entry '{id}' at {}", path.display()),
+            )
+        })
     }
 }
 
 impl XdgAutostartProvider {
-    async fn write_entry_file(&self, id: &str, file: &DesktopFile) -> Result<()> {
-        let path = self.entry_path(id);
-        tokio::fs::write(&path, file.to_text())
-            .await
-            .with_context(|| format!("writing autostart entry '{id}' at {}", path.display()))
+    /// Write `file` back to `path`, mapping permission errors to a sudo hint.
+    async fn write_entry_file(&self, id: &str, path: &Path, file: &DesktopFile) -> Result<()> {
+        tokio::fs::write(path, file.to_text()).await.map_err(|e| {
+            with_sudo_hint(
+                e,
+                &format!("writing autostart entry '{id}' at {}", path.display()),
+            )
+        })
     }
 }
 
-/// Resolve the default autostart directory from the XDG environment.
-fn default_autostart_dir() -> PathBuf {
+/// Wrap an I/O error from a write/remove with `context`, appending a hint about
+/// elevated privileges when the failure is `PermissionDenied`. System autostart
+/// entries live under `/etc/xdg/autostart`, which is only writable by root.
+fn with_sudo_hint(error: std::io::Error, context: &str) -> anyhow::Error {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        anyhow::Error::new(error).context(format!(
+            "{context} — system autostart entries require elevated privileges (try re-running with sudo)"
+        ))
+    } else {
+        anyhow::Error::new(error).context(context.to_string())
+    }
+}
+
+/// Resolve the default user autostart directory from the XDG environment.
+fn default_user_autostart_dir() -> PathBuf {
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
@@ -186,13 +300,32 @@ fn default_autostart_dir() -> PathBuf {
     config_home.join("autostart")
 }
 
+/// Resolve the default system autostart directories: every non-empty entry of
+/// `XDG_CONFIG_DIRS` (falling back to `/etc/xdg`), each joined with `autostart`,
+/// in precedence order. Always returns at least one directory.
+fn default_system_autostart_dirs() -> Vec<PathBuf> {
+    let raw = std::env::var_os("XDG_CONFIG_DIRS")
+        .and_then(|d| d.into_string().ok())
+        .unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = raw
+        .split(':')
+        .filter(|p| !p.is_empty())
+        .map(|p| PathBuf::from(p).join("autostart"))
+        .collect();
+    if dirs.is_empty() {
+        dirs.push(PathBuf::from("/etc/xdg/autostart"));
+    }
+    dirs
+}
+
 /// The file stem (id) of a `.desktop` path, if it has one.
 fn file_stem(path: &Path) -> Option<String> {
     path.file_stem().and_then(|s| s.to_str()).map(String::from)
 }
 
-/// Build an [`AutostartEntry`] from a parsed desktop file.
-fn entry_from_desktop(id: &str, file: &DesktopFile) -> AutostartEntry {
+/// Build an [`AutostartEntry`] from a parsed desktop file, tagged with the
+/// owning provider's `source` id and `scope`.
+fn entry_from_desktop(id: &str, file: &DesktopFile, source: &str, scope: Scope) -> AutostartEntry {
     let get = |key: &str| file.get(DESKTOP_ENTRY_GROUP, key).map(str::to_string);
     let hidden = file
         .get(DESKTOP_ENTRY_GROUP, "Hidden")
@@ -206,8 +339,8 @@ fn entry_from_desktop(id: &str, file: &DesktopFile) -> AutostartEntry {
         command: get("Exec").unwrap_or_default(),
         icon: get("Icon"),
         enabled: !hidden,
-        source: PROVIDER_ID.to_string(),
-        scope: Scope::User,
+        source: source.to_string(),
+        scope,
     }
 }
 
@@ -222,6 +355,19 @@ mod tests {
         let dir = tmp.path().join("autostart");
         std::fs::create_dir_all(&dir).unwrap();
         (XdgAutostartProvider::with_autostart_dir(dir), tmp)
+    }
+
+    /// A system-scoped provider backed by a fresh tempdir.
+    fn system_provider() -> (XdgAutostartProvider, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("autostart");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = XdgAutostartProvider {
+            id: SYSTEM_PROVIDER_ID,
+            scope: Scope::System,
+            autostart_dirs: vec![dir],
+        };
+        (p, tmp)
     }
 
     async fn write_desktop(p: &XdgAutostartProvider, id: &str, body: &str) {
@@ -333,5 +479,104 @@ mod tests {
         // Point at a dir that doesn't exist.
         let p = XdgAutostartProvider::with_autostart_dir(tmp.path().join("nope"));
         assert!(p.entries().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn system_provider_tags_source_and_scope() {
+        let (p, _guard) = system_provider();
+        assert_eq!(p.id(), "xdg-autostart-system");
+        assert_eq!(p.scope(), Scope::System);
+
+        write_desktop(
+            &p,
+            "example",
+            "[Desktop Entry]\nName=Example\nExec=example\n",
+        )
+        .await;
+
+        let entries = p.entries().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, "xdg-autostart-system");
+        assert_eq!(entries[0].scope, Scope::System);
+    }
+
+    #[tokio::test]
+    async fn merges_multiple_dirs_with_first_wins_precedence() {
+        let tmp = TempDir::new().unwrap();
+        let high = tmp.path().join("high");
+        let low = tmp.path().join("low");
+        std::fs::create_dir_all(&high).unwrap();
+        std::fs::create_dir_all(&low).unwrap();
+
+        // `shared` exists in both dirs; `low_only` exists only in the lower one.
+        std::fs::write(
+            high.join("shared.desktop"),
+            "[Desktop Entry]\nName=High\nExec=high\n",
+        )
+        .unwrap();
+        std::fs::write(
+            low.join("shared.desktop"),
+            "[Desktop Entry]\nName=Low\nExec=low\n",
+        )
+        .unwrap();
+        std::fs::write(
+            low.join("low_only.desktop"),
+            "[Desktop Entry]\nName=LowOnly\nExec=lowonly\n",
+        )
+        .unwrap();
+
+        // `high` is listed first, so it takes precedence for `shared`.
+        let p = XdgAutostartProvider {
+            id: SYSTEM_PROVIDER_ID,
+            scope: Scope::System,
+            autostart_dirs: vec![high, low],
+        };
+
+        let entries = p.entries().await.unwrap();
+        assert_eq!(entries.len(), 2);
+        let shared = entries.iter().find(|e| e.id == "shared").unwrap();
+        assert_eq!(shared.display_name, "High");
+        assert!(entries.iter().any(|e| e.id == "low_only"));
+    }
+
+    #[tokio::test]
+    async fn disable_writes_to_dir_where_entry_lives() {
+        let tmp = TempDir::new().unwrap();
+        let high = tmp.path().join("high");
+        let low = tmp.path().join("low");
+        std::fs::create_dir_all(&high).unwrap();
+        std::fs::create_dir_all(&low).unwrap();
+        std::fs::write(
+            low.join("only_low.desktop"),
+            "[Desktop Entry]\nName=OnlyLow\nExec=onlylow\n",
+        )
+        .unwrap();
+
+        let p = XdgAutostartProvider {
+            id: SYSTEM_PROVIDER_ID,
+            scope: Scope::System,
+            autostart_dirs: vec![high.clone(), low.clone()],
+        };
+
+        p.disable("only_low").await.unwrap();
+        // The edit landed on the lower dir (where the file is), not the primary.
+        let text = std::fs::read_to_string(low.join("only_low.desktop")).unwrap();
+        assert!(text.contains("Hidden=true"), "file was: {text}");
+        assert!(!high.join("only_low.desktop").exists());
+    }
+
+    #[test]
+    fn sudo_hint_only_on_permission_denied() {
+        use std::io::{Error, ErrorKind};
+
+        let denied = with_sudo_hint(Error::from(ErrorKind::PermissionDenied), "writing foo");
+        let msg = format!("{denied:#}");
+        assert!(msg.contains("writing foo"), "got: {msg}");
+        assert!(msg.contains("sudo"), "got: {msg}");
+
+        let not_found = with_sudo_hint(Error::from(ErrorKind::NotFound), "writing foo");
+        let msg = format!("{not_found:#}");
+        assert!(msg.contains("writing foo"), "got: {msg}");
+        assert!(!msg.contains("sudo"), "got: {msg}");
     }
 }

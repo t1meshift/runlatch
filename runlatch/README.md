@@ -21,6 +21,7 @@ cargo install runlatch
 ```sh
 runlatch list                            # all entries, grouped by source
 runlatch list --source xdg-autostart    # entries from one source only
+runlatch list --scope user              # only user- (or system-) scoped entries
 runlatch list --json                    # machine-readable output
 
 runlatch enable redshift                # enable by id (unambiguous bare id)
@@ -37,11 +38,12 @@ across all sources — rejected with suggestions if ambiguous) or a fully qualif
 
 ## Sources
 
-| Source id        | What it manages                                        |
-| ---------------- | ------------------------------------------------------ |
-| `xdg-autostart`  | `~/.config/autostart/*.desktop` files                  |
-| `systemd-user`   | systemd user units (requires an active session bus)    |
-| `systemd-system` | systemd system units (listing read-only; enable/disable may need elevation) |
+| Source id              | What it manages                                        |
+| ---------------------- | ------------------------------------------------------ |
+| `xdg-autostart`        | `~/.config/autostart/*.desktop` files                  |
+| `xdg-autostart-system` | `$XDG_CONFIG_DIRS/autostart/*.desktop` files (default `/etc/xdg/autostart`; enable/disable may need elevation) |
+| `systemd-user`         | systemd user units (requires an active session bus)    |
+| `systemd-system`       | systemd system units (listing read-only; enable/disable may need elevation) |
 
 Sources that are not available on the current machine (e.g. no session bus) are
 silently skipped; errors in one source never suppress results from the others.
